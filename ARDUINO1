@@ -1,0 +1,453 @@
+#include <Wire.h>    //ΒΙΒΛΙΟΘΗΚΗ ΓΙΑ ΝΑ ΕΠΙΚΟΙΝΩΝΗΣΕΙ ΜΕ Ο --I2C-- ΔΗΛΑΔΗ ΟΘΟΝΗ 
+#include <LiquidCrystal_I2C.h>     //ΒΙΒΛΙΟΘΗΚΗ ΓΙΑ ΑΙΣΘΗΤΗΡΕΣ ΟΠΩΣ ΘΕΡΜΟΚΡΑΣΙΑ ΚΑΙ ΥΓΡΑΣΙΑΣ 
+#include <DHT.h>     // ΔΙΝΕΙ ΤΙΜΕΣ ΤΗΣ ΘΕΡΜΟΚΡΑΣΙΑΣ ΚΑΙ ΤΗΣ ΥΓΡΑΣΙΑΣ 
+#include <TM1637Display.h>     //  ΒΙΒΛΙΟΘΗΚΗ ΓΙΑ ΤΟ  7_SEGMENT ΧΡΙΣΙΜΟΠΟΙΕΙΤΑΙ ΓΙΑ ΝΑ ΔΕΙΧΝΕΙ ΑΡΙΘΜΟΥΣ 
+#include <ArduinoJson.h>
+
+
+/*ΑΠΟ ΕΔΩ ΚΑΙ ΜΕΧΡΙ ΤΟ SETUP ΔΕΝ ΚΑΝΕΙ ΚΑΜΙΑ ΕΝΕΡΓΕΙΑ ΑΠΛΑ 
+ΔΗΛΩΝΕΙ ΟΛΑ ΤΑ PINS ΤΗΣ ΒΟΗΘΗΤΙΚΕΣ ΜΕΤΑΒΛΗΤΕΣ ΠΟΥ ΘΑ ΧΡΕΙΑΣΤΟΥΝ 
+ΣΤΗΝ ΣΥΕΝΧΕΙΑ ΣΤΟ void setup() KAI void  loop()*/
+
+
+StaticJsonDocument<200> doc;
+
+
+//    ----------- ULTRASONIC------------    //
+int trig = 3;
+int echo = 2;
+long timeInMicro;
+int distanceCM;
+
+
+
+
+//    -------- TEMPERATURE (DHT11)-------  //
+#define DHTPIN  7     // ΔΗΛΩΝΩ ΤΟ PIN 
+#define DHTTYPE DHT11  // ΕΔΩ ΛΕΩ ΟΤΙ Ο ΤΥΠΟΣ ΤΟΥ ΑΙΣΘΗΤΗΡΑ ΕΙΝΑ ΤΟ DHT11  (ΠΙΟ ΜΟΝΤΕΛΟ ΔΗΛΑΔΗ)
+DHT dht(DHTPIN, DHTTYPE);  // ΤΟ ΜΙΚΡΟ dht ΕΙΝΑΙ ΤΟ ΑΝΤΙΚΕΙΜΕΝΟ ΓΙΑ ΝΑ ΔΙΑΒΑΖΕΙ ΤΗΝ ΘΕΡΜΟΚΡΑΣΙΑ 
+
+
+
+
+//    -------- GAS SENSOR----------------- //
+int my_GAZ_sensor = A1;
+//    ---------BUZZER GOR GAZ----------------//
+int GAZ_BUZZER = 4;
+
+
+
+// ---------- LED TEMPERATURE-----------   // 
+int lED_TEMP29 = 9;   // T >=29 C
+int lED_TEMP32 = 10;  // T >= 32 C
+
+
+
+
+// ---------- RGB LED HUMIDITY----------  //
+int lED_HUM_RED = 5;       // Red   κανάλι
+int lED_HUM_GREEN = 6;       // Green κανάλι
+int lED_HUM_BLUE = 12;      // Blue  κανάλι
+
+
+
+
+// -------- 4‑DIGIT DISPLAY-------------  //
+const int TM_CLK = 13;                        
+const int TM_DIO = A2;                        
+TM1637Display display(TM_CLK, TM_DIO);
+
+
+
+
+// ----------- LCD ------------
+LiquidCrystal_I2C lcd(0x27, 16, 2);   //0χ27 ΕΙΝΑΙ Η ΤΑΥΤΟΤΗΤΑ ΤΗΣ ΟΘΟΝΗΣ  16 ΣΤΗΛΕΣ ΧΑΡΑΚΤΗΡΩΝ ΚΑΙ ΤΟ 2 ΕΙΝΑΙ ΟΙ ΣΕΙΡΕΣ
+
+
+
+
+//    ----------BUZZER-------------------  //
+int BUZZER_PIN = 8;
+
+
+
+
+// ----------- FLAG ΓΙΑ BUZEER------------
+bool ultrasonic_ready = false;    // ΕΙΝΑΙ ΜΙΑ ΑΡΧΙΚΟΙΠΟΙΗΣΗ ΓΙΑ ΤΟ BUZZER ΠΡΙΝ ΧΤΥΠΗΣΕΙ ΕΙΝΑΙ FALSE ΜΕΧΡΙ ΤΗΣ ΔΗΛΩΜΕΝΗ ΑΠΟΣΤΑΣΗ ΠΟΥ ΕΒΑΛΑ ΣΤΟ ARDUINO 
+
+
+
+
+// ------------ΑΠΟ ΠΟΥ ΘΕΛΩ ΝΑ ΜΕΤΡΑΕΙ-------------
+unsigned long startMillis   = 0;  
+
+
+
+
+//ΑΡΧΙΚΟΠΟΙΗΣΕΙ ΔΗΛΑΔΗ ΕΞΗΓΩ ΣΤΟ ARDUINO ΠΟΙΕΣ ΣΥΣΚΕΥΕΣ ΕΧΩ ΣΥΝΔΕΔΕΜΕΝΕΣ (ΑΝ ΕΙΝΑΙ ΓΙΑ ΕΙΣΟΔΟ Η ΕΞΟΔΟ)
+void setup() {
+
+
+  //ΣΕΡΙΑΚΗ ΕΠΙΚΟΙΝΩΝΙΑ 
+  Serial.begin(9600);
+
+
+
+  //ULTRASONIC
+  pinMode(trig, OUTPUT);
+  pinMode(echo, INPUT);
+
+
+  
+  //TEΜPERATURE
+  dht.begin();
+  lcd.init();
+  lcd.backlight();
+
+
+
+  //BUZZER
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+
+
+  //GAZ
+  pinMode(my_GAZ_sensor, INPUT);
+  pinMode(GAZ_BUZZER, OUTPUT);
+  
+ 
+
+  //LED
+  pinMode(lED_TEMP29, OUTPUT);
+  pinMode(lED_TEMP32, OUTPUT);
+  digitalWrite(lED_TEMP29, LOW);
+  digitalWrite(lED_TEMP32, LOW);
+
+
+
+  // RGB LED  ΓΙΑ ΤΗΝ ΥΓΡΑΣΙΑ 
+  pinMode(lED_HUM_RED , OUTPUT);
+  pinMode(lED_HUM_GREEN , OUTPUT);
+  pinMode(lED_HUM_BLUE, OUTPUT);
+  digitalWrite(lED_HUM_RED , LOW);
+  digitalWrite(lED_HUM_GREEN , LOW);
+  digitalWrite(lED_HUM_BLUE , LOW);
+  
+
+
+  // 4‑DIGITAL DISPLAY
+  display.setBrightness(0x0F);  // ΑΝΑΒΕΙ ΤΗΝ ΤΕΤΡΑΨΗΦΙΑ ΟΘΟΝΗ ΔΕΝ ΒΓΑΖΕΙ ΑΡΙΘΜΟΥΣ 
+  startMillis = millis();      // ΑΠΛΟΣ ΜΕΤΡΑΕΙ ΤΑ ΧΙΛΙΟΣΤΑ ΤΟΥ ΔΕΥΤΕΡΟΛΕΠΤΟΥ 
+
+
+
+  // ΑΠΟ ΕΔΩ ΚΑΙ ΚΑΤΩ ΕΙΝΑΙ ΤΑ ΜΥΝΗΜΑΤΑ ΠΟΥ ΘΑ ΕΜΦΑΝΙΣΗ Ο ΚΩΔΙΚΑΣ ΣΤΗΝ ΟΘΟΝΗ LCD 
+  lcd.setCursor(0, 0);
+  lcd.print("SYSTEM READY IN");
+  lcd.setCursor(0, 1);
+  lcd.print("TO 2 SECOND");
+  delay(2000);
+  lcd.clear();
+
+
+
+  lcd.setCursor(0, 0);
+  lcd.print("ACADEMIC ");
+  lcd.setCursor(0, 1);
+  lcd.print("SUPERVISOR");
+  delay(1500);
+  lcd.clear();
+
+
+
+  lcd.setCursor(0, 0);
+  lcd.print("PANAGIWTHS");
+  lcd.setCursor(0, 1);
+  lcd.print("GKONHS");
+  delay(1500);
+  lcd.clear();
+
+
+
+  lcd.setCursor(0, 0);
+  lcd.print("CREATOR ");
+  delay(1500);
+  lcd.clear();
+
+
+
+  lcd.setCursor(0, 0);
+  lcd.print("NTANIEL");
+  lcd.setCursor(0, 1);
+  lcd.print("SALIALLARI");
+  delay(1500);
+  lcd.clear();
+
+
+
+  String mess = "The materials I used in this project were  ";
+  for (int i = 0; i < mess.length() - 15; i++) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(mess.substring(i, i + 16));
+    delay(200);
+  }
+
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("SENSORS1");
+  lcd.setCursor(0, 1);
+  lcd.print("DRIVE_MOTOR");
+  delay(1500);
+  lcd.clear();
+
+
+
+  lcd.setCursor(0, 0);
+  lcd.print("DRIVE_MOTOR");
+  lcd.setCursor(0, 1);
+  lcd.print("4_DC & 4_WHEELS");
+  delay(3000);
+  lcd.clear();
+
+
+
+  lcd.setCursor(0, 0);
+  lcd.print("SENSORS2");
+  lcd.setCursor(0, 1);
+  lcd.print("ULTRASONIC");
+  delay(1500);
+  lcd.clear();
+
+
+
+  lcd.setCursor(0, 0);
+  lcd.print("SENSORS3");
+  lcd.setCursor(0, 1);
+  lcd.print("GAS");
+  delay(1500);
+  lcd.clear();
+
+
+
+  lcd.setCursor(0, 0);
+  lcd.print("SENSORS4");
+  lcd.setCursor(0, 1);
+  lcd.print("TEMPERATURE");
+  delay(1500);
+  lcd.clear();
+
+
+
+  lcd.setCursor(0, 0);
+  lcd.print("SENSORS5");
+  lcd.setCursor(0, 1);
+  lcd.print("LCD");
+  delay(1500);
+  lcd.clear();
+
+
+
+  String messs = "Hello my friend, my name is Delivery Robot. My role is to carry things based on your instructions. Trust me with anything you need. ";
+  for (int i = 0; i < messs.length() - 15; i++) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(messs.substring(i, i + 16));
+    delay(200);
+  }
+
+
+  lcd.setCursor(0, 0);
+  lcd.print("   :) LETS  :) ");
+  lcd.setCursor(0, 1);
+  lcd.print("   :) GO :) ");
+  delay(2000);
+  lcd.clear();
+}
+
+
+// ΤΟ VOID LOOP ΕΙΝΑΙ Ο ΚΩΔΙΚΑΣ ΠΟΥ ΕΚΤΕΛΕΙΤΕ ΣΥΝΕΧΩΣ ΤΟ ΑΝΤΙΘΕΤΟ ΤΟΥ VOID SETUP 
+void loop() {
+
+
+  /*ΘΕΡΜΟΚΡΑΣΙΑ ΚΑΙ ΥΓΡΑΣΙΑ ΔΗΛΩΝΟΥΜΕ ΤΗΣ ΜΕΤΑΒΛΗΤΕΣ ΑΡΧΙΚΑ ΔΙΩΤΗ ΧΩΡΙΣ ΤΗΝ
+   ΔΗΛΩΣΗ ΤΟΝ ΜΕΤΑΒΛΗΤΩΝ ΔΕΝ ΜΠΟΡΟΥΜΕ ΝΑ ΚΡΑΤΗΣΟΥΜΕ ΤΟ ΑΠΟΤΕΛΕΣΜΑ */
+
+  float temp = dht.readTemperature();
+  float hum  = dht.readHumidity();
+  float gas = analogRead(my_GAZ_sensor);
+
+  doc["Temperature:"] = temp;
+  doc["Humidity:"] = hum;
+  doc["Gas:"] = gas;
+
+  serializeJson(doc, Serial);
+  Serial.println(); // ΝΕΑ ΓΡΑΜΜΗ για την Python
+
+  delay(1000); // περίμενε 1 δευτερόλεπτο για επόμενο πακέτο
+
+  // Αν T ≥ 29 °C ανάβει το LED στο D9
+  if (temp >= 29) {
+    digitalWrite(lED_TEMP29, HIGH);
+  } else {
+    digitalWrite(lED_TEMP29, LOW);
+  }
+
+
+  // Αν T ≥ 32 °C ανάβει (επιπλέον) το LED στο D10
+  if (temp >= 32) {
+    digitalWrite(lED_TEMP32, HIGH);
+  } else {
+    digitalWrite(lED_TEMP32, LOW);
+  }
+
+   
+
+  /* ---------- 4‑DIGIT DISPLAY: χρόνος λειτουργίας ---------- */
+  unsigned long runSec  = (millis() - startMillis) / 1000UL;
+  unsigned long runMin  = runSec / 60UL;                 // συνολικά λεπτά
+  unsigned int  hours   = (runMin / 60U) % 100U;         // 0‑99 h
+  unsigned int  minutes = runMin % 60U;                  // 0‑59 min
+
+
+
+  // Μορφή HH:MM με άνω/κάτω τελεία που αναβοσβήνει κάθε δευτερόλεπτο
+  uint8_t colonMask = (runSec % 2UL) ? 0x00 : 0x40;      // toggle colon bit
+  int value = hours * 100 + minutes;                     // π.χ. 12:34 → 1234
+  display.showNumberDecEx(value, colonMask, true);
+
+
+
+
+  // ΑΕΡΙΟ
+
+  if (gas >= 400) {           // GAS ΣΥΝΑΓΕΡΜΟΣ
+  digitalWrite(GAZ_BUZZER, HIGH);   // ΧΤΥΠΑΕΙ 3 SECOND
+  delay(90);
+  digitalWrite(GAZ_BUZZER, LOW);    // ΣΤΑΜΑΤΑΕΙ 3 SECOND
+  delay(90);
+  } else {
+  digitalWrite(GAZ_BUZZER, LOW);    // σβηστό όταν gas < 100
+  }
+
+ 
+ 
+
+
+
+/* ---------- RGB LED υγρασίας ----------
+   * 10 < RH ≤ 20  → Πράσινο
+   * 20 < RH < 30  → Μπλε
+   * 30 ≤ RH < 50  → Μωβ (Red+Blue)
+   * RH ≥ 50       → Κόκκινο
+   * RH ≤ 10       → Σβηστό  */
+
+
+  if (hum > 10 && hum <= 30) {
+    // ΠΡΑΣΙΝΟ
+    digitalWrite(lED_HUM_RED, LOW);
+    digitalWrite(lED_HUM_GREEN, HIGH);
+    digitalWrite(lED_HUM_BLUE, LOW);
+  } 
+  
+
+  else if (hum > 30 && hum < 50) {
+    // ΜΠΛΕ
+    digitalWrite(lED_HUM_RED, LOW);
+    digitalWrite(lED_HUM_GREEN, LOW);
+    digitalWrite(lED_HUM_BLUE, HIGH);
+  } 
+
+  
+  else if (hum >= 50 && hum < 70) {
+    // ΜΩΒ  ( ΚΟΚΚΙΝΟ + ΜΠΛΕ)
+    digitalWrite(lED_HUM_RED, HIGH);
+    digitalWrite(lED_HUM_GREEN, LOW);
+    digitalWrite(lED_HUM_BLUE, HIGH);
+  } 
+
+  
+  
+  else if (hum >= 70) {
+    // ΚΟΚΚΙΝΟ
+    digitalWrite(lED_HUM_RED, HIGH);
+    digitalWrite(lED_HUM_RED, LOW);
+    digitalWrite(lED_HUM_RED, LOW);
+  } 
+
+  
+  else {
+    // RH ≤ 10 %  → LED OFF
+    digitalWrite(lED_HUM_RED, LOW);
+    digitalWrite(lED_HUM_GREEN, LOW);
+    digitalWrite(lED_HUM_BLUE, LOW);
+  }
+
+
+
+  // Υπερηχητική μέτρηση
+  digitalWrite(trig, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trig, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trig, LOW);
+
+
+
+  timeInMicro = pulseIn(echo, HIGH);
+
+
+
+  if (timeInMicro > 0 && timeInMicro < 30000) {
+    distanceCM = timeInMicro / 29 / 2;
+    ultrasonic_ready = true;
+
+    if (distanceCM <= 20) {
+      digitalWrite(BUZZER_PIN, HIGH);
+    } 
+    else {
+      digitalWrite(BUZZER_PIN, LOW);
+    }
+  }
+   else {
+    distanceCM = 0;
+    if (ultrasonic_ready) {
+      digitalWrite(BUZZER_PIN, LOW);
+    }
+  }
+
+
+  // LCD: Θερμοκρασία & Υγρασία
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("T: ");
+  lcd.print(temp);
+  lcd.print((char)223);  // ΕΔΩ ΜΠΑΙΝΕΙ ΤΟ ΣΥΜΒΟΛΟ ΤΟΥ  ΚΕΛΣΙΟΥ
+  lcd.print("C");
+
+
+
+  lcd.setCursor(0, 1);
+  lcd.print("H: ");
+  lcd.print(hum);
+  lcd.print("%");
+  delay(1000);
+
+
+
+  // ΣΤΗΝ  LCD ΕΜΦΑΝΙΖΕΙ ΑΕΡΙΟ ΚΑΙ ΑΠΟΣΤΑΣΗ 
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("GAS: ");
+  lcd.print(gas);
+
+
+
+  lcd.setCursor(0, 1);
+  lcd.print("DIST: ");
+  lcd.print(distanceCM);
+  lcd.print(" cm");
+  delay(1000);
+}
