@@ -1,0 +1,151 @@
+import asyncio 
+import time
+import pygame
+from bleak import BleakClient, BleakScanner
+
+# ────────────────────────────── BLE SETUP ──────────────────────────────
+BLE_DEVICE_NAME     = "HMSoft"  # HC-10/HM-10
+CHARACTERISTIC_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
+
+current_speed = 255   # 0-255 PWM for chassis motors
+
+# ────────────────────────────── HELPERS ────────────────────────────────
+async def send_command(client, command: str):
+    """Append newline, encode, send over BLE, and echo locally."""
+    if not command.endswith("\n"):
+        command += "\n"
+    await client.write_gatt_char(CHARACTERISTIC_UUID, command.encode())
+    print("→", command.strip())
+
+def setup_pygame():
+    pygame.init()
+    pygame.display.set_mode((300, 300))
+    pygame.display.set_caption("Robot BLE Control")
+    print("[ARROWS] Move   [+/-] Speed  "
+          "[T] Servo Up  [R] Servo Down  [ESC] Quit")
+
+# ──────────────────────── HANDLE INCOMING JSON DATA ───────────────────────
+buffer = b""  # Global buffer to collect data
+
+def handle_incoming(characteristic, data: bytes):
+    global buffer
+    try:
+        buffer += data
+        decoded = buffer.decode("utf-8", errors="ignore").strip()
+
+        # Look for complete JSON object
+        start_idx = decoded.find("{")
+        end_idx   = decoded.find("}", start_idx)
+
+        while start_idx != -1 and end_idx != -1:
+            json_str = decoded[start_idx:end_idx + 1]
+            print("📩 Robot JSON:", json_str)
+
+            # Remove this processed part from buffer
+            decoded = decoded[end_idx + 1:].strip()
+            buffer = decoded.encode("utf-8")  # Save the remaining part
+
+            start_idx = decoded.find("{")
+            end_idx   = decoded.find("}", start_idx)
+
+    except Exception as e:
+        print("⚠️ Error decoding or processing data:", e)
+        buffer = b""  # Reset on error to prevent infinite issues
+
+
+
+# ────────────────────────────── MAIN CONTROL LOOP ─────────────────────
+async def controller_loop(client):
+    global current_speed
+
+    servo_up   = False
+    servo_down = False
+
+    setup_pygame()
+    clock   = pygame.time.Clock()
+    running = True
+
+    # Enable notification handler
+    await client.start_notify(CHARACTERISTIC_UUID, handle_incoming)
+
+    while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
+            elif event.type == pygame.KEYDOWN:
+                cmd = None
+
+                if   event.key == pygame.K_UP:    cmd = "f"
+                elif event.key == pygame.K_DOWN:  cmd = "b"
+                elif event.key == pygame.K_LEFT:  cmd = "l"
+                elif event.key == pygame.K_RIGHT: cmd = "r"
+                elif event.key == pygame.K_SPACE: cmd = "s"
+
+                elif event.key in (pygame.K_PLUS, pygame.K_EQUALS):
+                    if current_speed <= 250:
+                        current_speed += 5
+                        cmd = f"speed{current_speed}"
+                elif event.key == pygame.K_MINUS:
+                    if current_speed >= 10:
+                        current_speed -= 10
+                        cmd = f"speed{current_speed}"
+
+                elif event.key == pygame.K_t:
+                    if not servo_up:
+                        await send_command(client, "servo_up_start")
+                        servo_up = True
+                elif event.key == pygame.K_r:
+                    if not servo_down:
+                        await send_command(client, "servo_down_start")
+                        servo_down = True
+
+                elif event.key == pygame.K_ESCAPE:
+                    running = False
+
+                if cmd:
+                    await send_command(client, cmd)
+
+            elif event.type == pygame.KEYUP:
+                if event.key in (pygame.K_UP, pygame.K_DOWN,
+                                 pygame.K_LEFT, pygame.K_RIGHT):
+                    await send_command(client, "s")
+                elif event.key == pygame.K_t and servo_up:
+                    await send_command(client, "servo_up_stop")
+                    servo_up = False
+                elif event.key == pygame.K_r and servo_down:
+                    await send_command(client, "servo_down_stop")
+                    servo_down = False
+
+        await asyncio.sleep(0.01)
+        clock.tick(60)
+
+    await client.stop_notify(CHARACTERISTIC_UUID)
+    pygame.quit()
+    print("Exited BLE Control")
+
+# ────────────────────────────── BLE CONNECT ───────────────────────────
+async def main():
+    print("🔍 Scanning for BLE devices …")
+    devices = await BleakScanner.discover(timeout=5.0)
+    for d in devices:
+        print(f"Found: {d.name or '?'}  [{d.address}]")
+
+    target = next((d for d in devices if BLE_DEVICE_NAME in (d.name or "")), None)
+    if not target:
+        print(f"❌ No BLE device named “{BLE_DEVICE_NAME}” found.")
+        return
+
+    print(f"✅ Connecting to {target.name} [{target.address}] …")
+    async with BleakClient(target.address) as client:
+        if not client.is_connected:
+            print("❌ Connection failed.")
+            return
+
+        print("✅ Connected!")
+        time.sleep(1)
+        await controller_loop(client)
+
+# ────────────────────────────── ENTRY POINT ───────────────────────────
+if __name__ == "__main__":
+    asyncio.run(main())
