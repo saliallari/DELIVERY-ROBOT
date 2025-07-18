@@ -3,11 +3,16 @@ import time
 import pygame
 from bleak import BleakClient, BleakScanner
 
+
+
 # ────────────────────────────── BLE SETUP ──────────────────────────────
 BLE_DEVICE_NAME     = "HMSoft"  # HC-10/HM-10
 CHARACTERISTIC_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
 
 current_speed = 255   # 0-255 PWM for chassis motors
+
+
+
 
 # ────────────────────────────── HELPERS ────────────────────────────────
 async def send_command(client, command: str):
@@ -23,6 +28,10 @@ def setup_pygame():
     pygame.display.set_caption("Robot BLE Control")
     print("[ARROWS] Move   [+/-] Speed  "
           "[T] Servo Up  [R] Servo Down  [ESC] Quit")
+
+
+
+
 
 # ──────────────────────── HANDLE INCOMING JSON DATA ───────────────────────
 buffer = b""  # Global buffer to collect data
@@ -54,16 +63,27 @@ def handle_incoming(characteristic, data: bytes):
 
 
 
+
+
+
+
 # ────────────────────────────── MAIN CONTROL LOOP ─────────────────────
 async def controller_loop(client):
     global current_speed
 
+
+
     servo_up   = False
     servo_down = False
+
+
 
     setup_pygame()
     clock   = pygame.time.Clock()
     running = True
+
+
+
 
     # Enable notification handler
     await client.start_notify(CHARACTERISTIC_UUID, handle_incoming)
@@ -82,6 +102,8 @@ async def controller_loop(client):
                 elif event.key == pygame.K_RIGHT: cmd = "r"
                 elif event.key == pygame.K_SPACE: cmd = "s"
 
+
+
                 elif event.key in (pygame.K_PLUS, pygame.K_EQUALS):
                     if current_speed <= 250:
                         current_speed += 5
@@ -90,6 +112,8 @@ async def controller_loop(client):
                     if current_speed >= 10:
                         current_speed -= 10
                         cmd = f"speed{current_speed}"
+
+
 
                 elif event.key == pygame.K_t:
                     if not servo_up:
@@ -102,6 +126,8 @@ async def controller_loop(client):
 
                 elif event.key == pygame.K_ESCAPE:
                     running = False
+
+
 
                 if cmd:
                     await send_command(client, cmd)
@@ -123,6 +149,11 @@ async def controller_loop(client):
     await client.stop_notify(CHARACTERISTIC_UUID)
     pygame.quit()
     print("Exited BLE Control")
+
+
+
+
+
 
 # ────────────────────────────── BLE CONNECT ───────────────────────────
 async def main():
