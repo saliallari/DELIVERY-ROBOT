@@ -1,0 +1,421 @@
+#include <Servo.h>                           //ΕΛΕΓΧΟΣ SERVO ΚΙΝΗΤΗΡΕΣ
+#include <ThreeWire.h>                       // ΕΠΙΚΟΙΝΩΝΙΑ ΜΕ ΟΡΙΣΜΕΝΑ RTC ΡΟΛΟΓΙΑ
+#include <RtcDS1302.h>                       // Η ΒΙΒΛΙΟΘΗΚΗ ΓΙΑ ΡΟΛΟΙ ΠΡΑΓΜΑΤΙΚΟΥ ΧΡΟΝΟΥ
+#include <TM1637Display.h>                   //ΟΘΟΝΗ 4 ΨΗΦΙΩΝ ΔΕΙΧΝΕΙ ΩΡΑ ΑΡΙΘΜΟΥΣ ΓΡΑΜΜΑΤΑ
+#include <ArduinoJson.h>                     // ΕΠΙΤΡΕΠΕΙ ΝΑ ΔΙΑΒΑΖΕΙΣ JSON ΔΕΔΟΜΕΝΑ ΕΠΙΚΟΙΝΩΝΙΑ ΥΠΟΛΟΓΙΣΤΗ ΜΕ ΑΛΛΗ ΣΥΣΚΕΥΗ
+#include <Wire.h>                            // ΕΠΙΚΟΙΝΩΝΙΑ ΜΕ ΤΟ ΜPU6050 
+#include <MPU6050.h>                         //ΕΛΕΓΧΕΙ ΤΟΝ ΑΙΣΘΗΤΗΡΑ MPU6050
+#include <math.h>                            //ΜΑΘΗΜΑΤΙΚΕΣ ΣΥΑΝΡΤΗΣΕΙΣ SIN COS ABS ATAN SQRT
+
+
+
+MPU6050 mpu;
+
+int16_t ax, ay, az;                       // EΠΙΤΑΧΥΝΣΙΟΜΕΤΡΟ
+int16_t gx, gy, gz;                       //ΓΥΡΟΣΚΟΠΙΟ 
+
+
+
+float pitch = 0.0;                          //ΔΗΛΩΣΗ ΓΩΝΙΑΣ ΕΜΠΡΟΣ/ΠΙΣΩ   0.0 ΑΡΑ ΞΕΚΙΝΑΕΙ ΕΥΘΕΙΑ
+float roll = 0.0;                          //ΔΗΛΩΣΗ  ΓΩΝΙΑΣ ΚΛΙΣΗ ΑΡΙΣΤΕΡΑ ΔΕΞΙΑ
+
+
+
+const float MAX_SAFE_ANGLE = 15.0;          // ΚΑΘΟΡΙΖΟΥΜΕ ΤΗΣ ΜΟΙΡΕΣ ΑΠΟ ΤΗΝ ΑΡΧΗ ΔΗΛΑΔΗ ΤΟ ΕΠΙΤΡΕΠΤΩ ΟΡΙΟ ΤΗΣ ΜΟΙΡΑΣ ΠΟΥ ΜΠΟΡΕΙ ΝΑ ΚΟΥΝΗΘΕΙ 
+bool robotTipped = false;                   // ΔΕΙΧΝΕΙ ΑΝ ΤΟ ΡΟΜΠΟΤ ΕΧΕΙ ΑΝΑΤΡΑΠΕΙ
+
+
+
+const float SHAKE_THRESHOLD_G = 1.3;                      // ΚΑΘΟΡΙΖΟΥΜΕ ΤΗΝ ΔΥΝΑΜΗ ΠΟΥ ΜΠΟΡΕΙ ΝΑ ΔΕΧΤΕΙ ΔΗΛΑΔΗΛΔ ΤΟ ΤΡΑΝΤΑΓΜΑ 
+const float FREE_FALL_THRESHOLD_G = 0.62;                 // ΑΝ ΤΟ ΟΡΙΟ ΠΤΩΣΕΙΣ ΕΙΝΑΙ ΠΑΝΩ ΑΠΟ 0.62  (Η ΕΧΕΙ ΠΕΣΕΙ Η ΥΟ ΣΗΚΩΣΑΝ)
+
+
+
+float axg, ayg, azg;                                      //ΔΗΛΩΣΗ ΜΕΤΑΒΛΗΤΩΝ ΓΙΑ ΤΗΝ ΕΠΙΤΑΧΥΝΣΗ ΣΤΟΥΣ ΤΡΕΙΣ ΑΞΟΝΕΣ
+
+
+
+bool shakeDetected = false;                               //ΔΕΙΧΝΕΙ ΑΝ ΕΧΕΙ ΚΟΥΝΗΘΕΙ ΤΟ ΡΟΜΠΟΤ
+bool pickupDetected = false;                              //ΔΕΙΧΝΕΙ ΑΝ ΕΧΕΙ ΠΕΣΕΙ ΤΟ ΡΟΜΠΟΤ Η ΤΟ ΠΑΙΡΝΟΥΝ 
+bool inSafeMode = false;                                  // ΜΠΑΙΝΕΙ ΣΕ ΜΟΥΝΤ ΠΡΟΣΤΑΣΙΑΣ ΔΗΛΑΔΗ ΣΤΑΜΑΤΑΕΙ ΝΑ ΚΙΝΕΙΤΑΙ ΚΑΙ ΔΕΙΧΝΕΙ ΠΡΟΕΙΔΟΠΟΙΗΣΗ
+
+
+
+
+StaticJsonDocument<200> doc;                              //ΦΤΑΙΧΝΕΙ ΕΝΑ ΑΝΤΙΚΕΙΜΕΝΟ JSON ΓΙΑ ΝΑ ΑΠΟΘΗΚΕΥΕΙ ΣΕΣΟΜΕΝΑ ΠΟΥ ΘΑ ΣΤΕΛΝΕΙ ΤΟ ΡΟΜΠΟΤ doc["Posture"] = "Robot upright";
+String jsonString;
+
+
+
+const int motor1pin1 = 6;
+const int motor1pin2 = 7;
+const int ENA        = 5;
+const int motor2pin1 = 8;
+const int motor2pin2 = 9;
+const int ENB        = 10;
+
+int motorSpeed = 255;
+
+
+
+Servo myServo;
+const int servoPin = 11;
+int  servoPos      = 90;
+const int STEP     = 5;
+bool servoUp   = false;
+bool servoDown = false;
+
+
+
+const unsigned long SERVO_PERIOD  = 30;                  //ΑΛΑΓΕΙ ΤΟΥ SERVO ΣΕ ΚΑΘΕ ΚΙΝΗΣΗ ΚΑΘΕ 30MS  
+unsigned long       lastServoTick = 0;                   //ΚΡΑΤΑΕΙ ΤΗΝ ΤΕΛΕΥΤΑΙΑ ΚΙΝΗΣΗ ΤΟΥ SERVO  ΑΡΑ ΟΤΑΝ ΠΕΡΑΣΟΥΝ 30ΜΜΣ θΑ ΚΑΝΕΙ ΤΗΝ ΚΙΝΗΣΗ 5 ΣΤΕΠ
+
+
+
+
+#define DS1302_DAT 12
+#define DS1302_CLK 13
+#define DS1302_RST 4
+ThreeWire myWire(DS1302_DAT, DS1302_CLK, DS1302_RST);
+RtcDS1302<ThreeWire> Rtc(myWire);        //ΔΙΑΒΑΖΕΙ ΚΑΙ ΡΥΘΜΙΖΕΙ ΤΗΝ ΩΡΑ ΚΑΙ ΤΗΝ ΗΜΕΡΟΜΗΝΙΑ ΓΙΑ ΤΟ RCT
+
+
+
+
+#define TM_CLK 2                                                //ΟΡΙΖΕΙ ΤΟ PIN2  ΘΑ ΣΥΝΔΕΘΕΙ ΜΕ ΤΟ CLOCK ΤΗΣ ΟΘΟΝΗΣ TM1637
+#define TM_DIO 3                                                //ΟΡΙΖΕΙ ΤΟ PIN3 ΘΑ ΣΥΝΔΕΘΕΙ ΜΕ ΤΟ DIO  ΤΑ ΔΕΔΟΜΕΝΑ ΔΛΔ ΤΗΣ ΟΘΟΝΗΣ 
+TM1637Display display(TM_CLK, TM_DIO);                          // ΦΤΙΑΧΝΕΙ ΤΟ ΑΝΤΙΚΕΙΜΕΝΟ DISPLAY ΓΙΑ ΝΑ ΕΛΕΓΧΕΙ ΤΗΝ ΟΘΟΝΗ ΤΜ1637
+
+
+
+
+bool showColon = true;                                          // ΕΔΩ ΒΓΑΖΕΙ ΤΗΝ : ΓΙΑ ΝΑ ΦΑΙΝΕΤΑΙ ΣΑΝ ΠΡΑΓΜΑΤΙΚΟ ΡΟΛΟΙ ΣΤΗΝ ΟΘΟΝΗ
+unsigned long lastColonToggle = 0;                              // ΘΥΜΑΤΑΙ ΠΟΤΕ ΕΓΙΝΕ Η ΤΕΛΕΤΑΥΙΑ ΑΛΑΓΗ ΓΙΑ ΝΑ ΕΜΦΑΝΙΖΕΙ ΤΟ :
+const unsigned long COLON_PERIOD = 500;                         //: ΘΑ ΤΟ ΑΛΛΑΖΕΙ ΚΑΘΕ 500MS
+unsigned long lastClockUpdate = 0;                              //ΠΟΤΕ ΕΝΗΜΕΡΩΘΗΚΕ ΤΕΛΕΤΑΥΑ ΦΟΡΑ Η ΩΡΑ 
+const unsigned long CLOCK_PERIOD = 1000;                        // Η ΩΡΑ ΤΗΣ ΟΘΟΝΗΣ ΘΑ ΑΝΑΝΕΩΝΕΤΕ ΚΑΘΕ 1MS
+
+
+
+
+void stopMotors();
+void moveForward();
+void moveBackward();
+void turnLeft();
+void turnRight();
+
+
+
+
+
+void setup() {
+
+  Serial.begin(9600);
+
+
+  pinMode(motor1pin1, OUTPUT);
+  pinMode(motor1pin2, OUTPUT);
+  pinMode(motor2pin1, OUTPUT);
+  pinMode(motor2pin2, OUTPUT);
+  pinMode(ENA, OUTPUT);
+  pinMode(ENB, OUTPUT);
+
+
+  myServo.attach(servoPin);
+  myServo.write(servoPos);
+
+
+  display.setBrightness(0x0f);       // MΕΓΙΣΤΗ ΦΩΤΕΙΝΩΤΗΤΑ ΓΙΑ ΤΗΝ ΟΘΟΝΗ
+
+
+
+
+  Rtc.Begin();                                            // ΞΕΚΙΝΑΙΕ Η ΕΠΙΚΟΙΚΟΙΝΩΝΙΑ ΜΕ ΤΟ RTC
+  if (!Rtc.IsDateTimeValid()) {                           // ΒΛΕΠΕΙ ΑΝ ΕΧΕΙ ΤΗΝ ΚΑΝΟΝΙΚΓ ΗΜΕΡΟΜΙΝΗΑ Η ΩΡΑ ΑΝ ΔΕΝ ΕΧΕΙ ΕΙΝΑΙ ΛΑΘΟΣ 
+    RtcDateTime compiled(__DATE__, __TIME__);             // ΒΛΕΠΕΙ ΤΗΝ ΠΡΑΓΜΑΤΙΚΗ ΗΜΕΡΟΜΗΝΙΑ ΚΑΙ ΩΡΑ ΠΟΥ ΕΓΙΝΕ Η ΡΥΘΜΙΣΗ 
+    Rtc.SetDateTime(compiled);                            // ΘΕΛΩ ΤΗΝ ΠΩΡΑ ΠΟΥ ΕΦΤΙΑΞΑ ΣΤΗΝ ΠΡΟΙΓΟΥΜΕΝΗ ΓΡΑΜΜΗ 
+  } 
+
+
+  if (!Rtc.GetIsRunning()) Rtc.SetIsRunning(true);
+
+  Wire.begin();                                           // ΞΕΚΙΝΑΕΙ ΤΗΝ ΕΠΙΚΟΙΝΩΝΙΑ ΜΕ ΑΛΛΑ ΕΞΑΡΤΗΜΑΤΑ  
+  Serial.println("Initializing MPU6050...");              // ΞΕΚΙΝΑΕΙ ΤΟ MPY3060 
+  mpu.initialize();
+  if (mpu.testConnection()) {
+    Serial.println("✅ MPU6050 connection successful!");             // ΑΝ ΕΙΝΑΙ ΣΩΣΤΗ Η ΔΥΝΔΕΣΗ ΕΙΝΑΙ ΕΝΤΑΞΗ 
+  } else {
+    Serial.println("❌ MPU6050 connection failed!");                 // ΑΛΛΙΩΣ ΑΝ ΔΕΝ ΕΙΝΑΙ  ΒΑΓΖΕΙ ΕΡΡΟΡ 
+    while (1);
+  }
+
+
+
+  stopMotors();
+  Serial.println(F("Robot + Servo + Clock ready."));              // ΣΤΗΝ ΑΡΧΗ ΤΟΥ ΚΩΔΙΚΑ ΕΙΝΑΙ ΟΛΑ ΚΛΕΙΣΤΑ ΓΙΑΥΤΟ ΒΑΖΟΥΜΕ ΣΤΟΠ ΜΟΤΟΡ ΑΛΛΙΩΣ ΑΝ ΔΕΝ ΑΒΑΖΑ ΚΑΤΙ ΤΟ ΜΟΤΟΡ ΚΑΙ ΤΟ ΣΕΡΒΟ ΘΑ ΚΙΝΟΥΤΑΝ
+}
+
+
+
+void loop() {
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();            // ΑΦΑΙΡΕΙ ΤΥΧΟΝ ΚΕΝΑ ΑΛΛΑΓΕΣ ΓΡΑΜΜΕΣ ΑΠΟ ΤΗ ΝΑΡΧΗ ΚΑΙ ΣΤΟ ΤΕΛΟΣΔ ΤΟΥ ΜΗΝΗΑΜΤΟς 
+
+
+    if (command == "f") moveForward();               //ΣΤΕΙΛΑΜΕ F ΠΑΕΙ ΜΠΡΟΣΤΑ
+    else if (command == "b") moveBackward();         //ΣΤΕΙΛΑΜΕ b ΠΑΕΙ ΠΙΣΩ        
+    else if (command == "r") turnLeft();             //ΣΤΕΙΛΑΜΕ r ΠΑΕΙ ΑΡΙΣΤΕΡΑ
+    else if (command == "l") turnRight();            //ΣΤΕΙΛΑΜΕ l ΠΑΕΙ ΔΕΞΙΑ
+    else if (command == "s") stopMotors();           //ΣΤΕΙΛΑΜΕ s ΠΑΕΙ ΣΤΑΜΑΤΑΕΙ
+    else if (command.startsWith("speed")) {         //
+      int v = command.substring(5).toInt();           //  ΕΔΩ ΡΥΘΜΙΖΩ ΤΗΝ ΤΑΧΥΤΑ ΤΟΥ ΡΟΜΠΟΤ ΠΟΣΟ ΤΟ ΘΕΛΩ        
+      if (v >= 0 && v <= 255) motorSpeed = v;       //    
+    }
+
+
+    else if (command == "servo_up_start") 
+    { servoUp = true; servoDown = false; }                // ΚΙΝΗΣΗ ΣΕΡΒΟ ΠΡΟΣ ΤΑ ΠΑΝΩ 
+
+
+    else if (command == "servo_up_stop")                 // ΚΙΝΗΣΗ ΣΕΡΒΟ ΠΑΝΩ  ((((ΣΤΟΠ))))
+      { servoUp = false; }
+
+
+    else if (command == "servo_down_start")              // ΚΙΝΗΣΗ   ΣΕΡΒΟ ΠΡΟΣ ΤΑ ΚΑΤΩ
+     { servoDown = true; servoUp = false; }
+
+
+    else if (command == "servo_down_stop")               // ΚΙΝΗΣΗ ΣΕΡΒΟ ΚΑΤΩ  ((((ΣΤΟΠ))))
+    
+     { servoDown = false; }
+  }
+
+
+
+
+  unsigned long now = millis();
+
+  if (now - lastServoTick >= SERVO_PERIOD) {
+    lastServoTick = now;
+    if (servoUp && servoPos < 180) {
+      servoPos += STEP;                                   // Αυξάνουμε τη θέση του servo κατά 5 μοίρες.
+      myServo.write(servoPos);
+    }
+    if (servoDown && servoPos > 0) {
+      servoPos -= STEP;                                  // Μειώνουμε τη θέση του servo κατά 5 μοίρες.
+
+      myServo.write(servoPos);
+    }
+  }
+
+
+
+  if (now - lastColonToggle >= COLON_PERIOD) {
+    showColon = !showColon;
+    lastColonToggle = now;
+  }
+
+  if (now - lastClockUpdate >= CLOCK_PERIOD) {
+    lastClockUpdate = now;
+    RtcDateTime t = Rtc.GetDateTime();
+    uint16_t hhmm = t.Hour() * 100 + t.Minute();
+    uint8_t mask = showColon ? 0b11100000 : 0;
+    display.showNumberDecEx(hhmm, mask, true);
+  }
+
+  updateTiltAngles();
+}
+
+
+
+
+// AYTO TO VOID ΕΙΝΑΙ ΓΙΑ ΝΑ ΜΑΣ ΔΕΙΞΕΙ ΤΗΣ ΜΟΙΡΕΣ ΤΟΥ ΡΟΜΠΟΤ 
+// ΣΤΗΝ ΑΡΧΗ ΔΗΛΩΣΑΜΕ 15 ΜΟΙΡΕΣ 
+//ΑΝ ΟΙΟ ΜΟΙΡΕΣ ΕΙΝΑΙ ΠΑΡΑΠΑΝΩ ΑΠΟ 15 ΘΑ ΜΑΣ ΒΓΑΛΕΙ ΑΥΤΟ ΤΟ ΜΗΝΗΜΑ ⚠️ WARNING: Robot tipped over!
+//ΚΑΙ ΘΑ ΣΤΑΜΑΤΗΣΕΙ ΤΟ ΜΟΤΕΡ 
+
+void updateTiltAngles() {
+  int16_t axRaw, ayRaw, azRaw, gxRaw, gyRaw, gzRaw;
+  mpu.getMotion6(&axRaw, &ayRaw, &azRaw, &gxRaw, &gyRaw, &gzRaw);
+
+  axg = axRaw / 16384.0;
+  ayg = ayRaw / 16384.0;
+  azg = azRaw / 16384.0;
+
+  pitch = atan2(axg, sqrt(ayg * ayg + azg * azg)) * 180 / PI;
+  roll  = atan2(ayg, sqrt(axg * axg + azg * azg)) * 180 / PI;
+
+  doc.clear();
+
+  if (abs(pitch) > MAX_SAFE_ANGLE || abs(roll) > MAX_SAFE_ANGLE) {
+    if (!robotTipped) {
+      //stopMotors();
+      robotTipped = true;
+      //inSafeMode = true;
+      doc["Tipped"] = "⚠️ WARNING: Robot tipped over!";
+    }
+  } else {
+    robotTipped = false;            //Αν δεν έχει γείρει, επαναφέρει το robotTipped σε false.
+  }
+
+  detectMotionPatterns();
+  classifyPosture();
+
+  serializeJson(doc, jsonString);
+  Serial.println(jsonString);
+}
+
+
+
+
+
+
+// ΕΔΩ Ο ΚΩΔΙΚΑΣ ΕΙΝΑΙ ΓΙΑ ΤΟ ΑΝ ΚΟΥΝΗΘΗΚΕ ΤΟ ΡΟΜΠΟΤ 
+// ΚΑΙ ΓΙΑ ΤΟ ΑΝ ΣΗΚΩΘΗΚΕ Η ΕΠΕΣΕ ΑΠΟΤΟΜΑ ΚΑΤΩ
+
+void detectMotionPatterns() {
+  float accMagnitude = sqrt(axg * axg + ayg * ayg + azg * azg);
+
+  if (accMagnitude > SHAKE_THRESHOLD_G) {    // ΓΙΑ ΠΑΡΑΔΕΙΓΜΑ ΧΤΥΠΣΗΣΕ ΣΕ ΤΟΙΧΟ ΘΑ ΒΓΑΛΕΙ ΑΥΤΟ ΤΟ ΜΝΜ "🚨 Shake/Impact detected!";
+    if (!shakeDetected) {
+      doc["Shake"] = "🚨 Shake/Impact detected!";
+      shakeDetected = true;
+      //stopMotors();
+      //inSafeMode = true;
+    }
+  } else {
+    shakeDetected = false;
+  }
+
+  if (abs(azg) < FREE_FALL_THRESHOLD_G) {   // ΓΙΑ ΠΑΡΑΔΕΙΓΜΑ ΕΠΕΣΕ ΚΑΤΩ ΑΠΟΤΟΜΑ Η ΤΡΑΒΗΧΤΗΚΕ ΑΠΟΤΟΜΑ ΑΠΟ ΤΟ ΠΑΤΩΜΑ ΘΑ ΒΓΑΛΕΙ ΑΥΤΟ ΤΟ ΜΗΝΗΜΑ  "⚠️ Pickup or free fall detected!";
+    if (!pickupDetected) {
+      doc["Pickup"] = "⚠️ Pickup or free fall detected!";
+      pickupDetected = true;
+      stopMotors();
+      inSafeMode = true;
+    }
+  } else {
+    pickupDetected = false;
+  }
+}
+
+
+
+
+void classifyPosture() {
+  String posture;
+  const float G_THRESHOLD = 0.60;
+  const float DOMINANCE_MARGIN = 0.20;
+
+  bool axDominant = (abs(axg) > G_THRESHOLD) && (abs(axg) > abs(ayg) + DOMINANCE_MARGIN) && (abs(axg) > abs(azg) + DOMINANCE_MARGIN);
+  bool ayDominant = (abs(ayg) > G_THRESHOLD) && (abs(ayg) > abs(axg) + DOMINANCE_MARGIN) && (abs(ayg) > abs(azg) + DOMINANCE_MARGIN);
+  bool azDominant = (abs(azg) > G_THRESHOLD) && (abs(azg) > abs(axg) + DOMINANCE_MARGIN) && (abs(azg) > abs(ayg) + DOMINANCE_MARGIN);
+
+  if (axDominant) {
+    if (axg > 0) {
+      posture = "🤖 Robot lying on its back";
+
+      stopMotors();
+
+      inSafeMode = true;
+
+    } else {
+      posture = "🤖 Robot lying on its front";
+    }
+  } else if (ayDominant) {
+    if (ayg > 0) {
+      posture = "🤖 Robot lying on its right side";
+
+      stopMotors();
+
+      inSafeMode = true;
+
+    } else {
+      posture = "🤖 Robot lying on its left side";
+
+      stopMotors();
+
+      inSafeMode = true;
+    }
+  } else if (azDominant) {
+    if (azg > 0) {
+      posture = "🟢 Robot upright";
+    } else {
+      posture = "🔄 Robot upside down";
+
+      stopMotors();
+
+      inSafeMode = true;
+    }
+  } else {
+    posture = "❓ Unclear posture yet.";
+  }
+
+  doc["Posture"] = posture;
+}
+
+
+
+
+
+
+
+/* ---------- CHASSIS HELPERS ---------- */
+void moveForward()
+{
+    analogWrite(ENA, motorSpeed);
+    analogWrite(ENB, motorSpeed);
+    digitalWrite(motor1pin1, LOW);  
+    digitalWrite(motor1pin2, HIGH);
+    digitalWrite(motor2pin1, LOW);  
+    digitalWrite(motor2pin2, HIGH);
+}
+
+
+
+void moveBackward()
+{
+    analogWrite(ENA, motorSpeed);
+    analogWrite(ENB, motorSpeed);
+    digitalWrite(motor1pin1, HIGH);
+    digitalWrite(motor1pin2, LOW);
+    digitalWrite(motor2pin1, HIGH);
+    digitalWrite(motor2pin2, LOW);
+}
+
+
+
+void stopMotors()
+{
+    analogWrite(ENA, 0);
+    analogWrite(ENB, 0);
+    digitalWrite(motor1pin1, LOW);
+    digitalWrite(motor1pin2, LOW);
+    digitalWrite(motor2pin1, LOW); 
+    digitalWrite(motor2pin2, LOW);
+}
+
+
+
+void turnLeft()
+{
+    analogWrite(ENA, motorSpeed);
+    analogWrite(ENB, motorSpeed);
+    digitalWrite(motor1pin1, HIGH);
+    digitalWrite(motor1pin2, LOW);   
+    digitalWrite(motor2pin1, LOW); 
+    digitalWrite(motor2pin2, HIGH);  
+}
+
+
+
+void turnRight()
+{
+    analogWrite(ENA, motorSpeed);
+    analogWrite(ENB, motorSpeed);
+    digitalWrite(motor1pin1, LOW);
+    digitalWrite(motor1pin2, HIGH);  
+    digitalWrite(motor2pin1, HIGH);
+    digitalWrite(motor2pin2, LOW);   
+}
