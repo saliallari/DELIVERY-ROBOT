@@ -1,0 +1,84 @@
+import serial 
+import json
+import time
+import pandas as pd
+from joblib import load
+
+# ────────────────────── CONFIGURATION ──────────────────────
+SERIAL_PORT = 'COM8'     # HC-05 COM 
+BAUD_RATE   = 9600
+
+# Load trained model and scaler
+model  = load('model.joblib')
+scaler = load('scaler.joblib')
+
+# ────────────────────── OPEN SERIAL CONNECTION ──────────────────────
+try:
+    ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
+    print(f"✅ Connected to {SERIAL_PORT} at {BAUD_RATE} baud")
+    time.sleep(2)  # Let HC-05 and Arduino boot
+except Exception as e:
+    print(f"❌ Failed to open serial port: {e}")
+    exit(1)
+
+# ────────────────────── MAIN LOOP ──────────────────────
+buffer = ""
+
+try:
+    while True:
+        if ser.in_waiting > 0:
+            char = ser.read().decode("utf-8", errors="ignore")
+            buffer += char
+
+            # Check if buffer contains a full JSON object
+            start_idx = buffer.find("{")
+            end_idx   = buffer.find("}", start_idx)
+
+            if start_idx != -1 and end_idx != -1:
+                json_str = buffer[start_idx:end_idx + 1]
+                print("📩 Incoming JSON:", json_str)
+
+                try:
+                    data = json.loads(json_str)
+                    
+                    data = {k.strip(':'): v for k, v in data.items()}
+
+                    
+                    if all(k in data for k in ["Temperature", "Humidity", "Gas"]):
+                        temperature = float(data["Temperature"])
+                        humidity    = float(data["Humidity"])
+
+                        gas = data["Gas"]
+                        gas_value = int(gas.get("value", -1)) if isinstance(gas, dict) else int(gas)
+
+                        df = pd.DataFrame([[temperature, humidity, gas_value]],
+                                          columns=["Temperature", "Humidity", "Gas"])
+
+                        scaled = scaler.transform(df)
+                        prediction = model.predict(scaled)[0]
+
+                        if prediction == -1:
+                            print("⚠️ Anomaly Detected (Possible Smoke/Fire)")
+                        else:
+                            print("✅ Normal Reading")
+
+                    else:
+                        print("❌ Missing required keys in data")
+
+                except json.JSONDecodeError:
+                    print("❌ JSON decoding failed")
+                except Exception as e:
+                    print("❌ Anomaly detection failed:", e)
+
+                # Clear processed part of buffer
+                buffer = buffer[end_idx + 1:]
+
+        time.sleep(0.05)
+
+except KeyboardInterrupt:
+    print("\n🛑 Stopped by user")
+
+finally:
+    ser.close()
+
+    print("🔌 Serial connection closed")
